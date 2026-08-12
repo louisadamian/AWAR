@@ -1,8 +1,10 @@
+import os.path
 import mlbstatsapi
+import pandas
 import pandas as pd
 from datetime import datetime
-import statsapi
 import numpy as np
+import os
 
 
 class PitchingCalculator:
@@ -11,12 +13,18 @@ class PitchingCalculator:
     equations credit to Piper Slowinski at Fangraphs
     """
 
-    def __init__(self, league_avg_pitching_data_path: str, park_factors_path: str):
-        self.pitching = pd.read_csv(league_avg_pitching_data_path, index_col="Year")
-        self.park_factor = pd.read_csv(park_factors_path, index_col="Team")
+    def __init__(
+        self,
+        league_avg_pitching: pandas.DataFrame,
+        park_factors: pandas.DataFrame,
+        mlb_stats: mlbstatsapi.Mlb,
+    ):
+        self.pitching = league_avg_pitching
+        self.park_factors = park_factors
         self.division_fipr9s = {}
-        self.mlbstats = mlbstatsapi.Mlb()
-        self.fipr9 = dict()
+        self.mlbstats = mlb_stats
+        self.fipr9_devisions = dict()
+        self.fipr9_league = dict()
 
     def fipc(self, year: int):
         """
@@ -69,9 +77,12 @@ class PitchingCalculator:
             / float(pitching_stats.innings_pitched)
         ) + self.fipc(year)
 
-    def __calc_divisions_fipr9(self, year):
-        if year in self.fipr9.keys():
-            return self.fipr9[year]
+    def __calc_fipr9_divisions(self, year):
+        """
+        fipr9 for all divisions for a given year
+        """
+        if year in self.fipr9_devisions.keys():
+            return self.fipr9_devisions[year]
         teams = self.mlbstats.get_teams(sport_id=1)
         divisions_fipr9s = {}
         fip_adj = (
@@ -86,15 +97,29 @@ class PitchingCalculator:
         fipr9s = {}
         for key in divisions_fipr9s.keys():
             fipr9s[key] = np.array(divisions_fipr9s[key]).mean()
-        self.fipr9[year]=fipr9s
+        self.fipr9_devisions[year] = fipr9s
         return fipr9s
+
+    def calc_fipr9_league(self, year):
+        if year in self.fipr9_league.keys():
+            return self.fipr9_league[year]
+        teams = self.mlbstats.get_teams(sport_id=1)
+        team_fipr9s = np.empty(30)
+        fip_adj = (
+            self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]
+        ) * 9 - self.pitching.loc[year].loc["ERA"]
+        for i, team in enumerate(teams):
+            fipr9 = self.fip_team(team.id, year) + fip_adj
+            team_fipr9s[i] = fipr9
+        fipr9_year = np.mean(team_fipr9s)
+        self.fipr9_league[year] = fipr9_year
+        return fipr9_year
 
     def pitching_war(self, player_id, year: int = datetime.now().year):
         """
         https://library.fangraphs.com/war/calculating-war-pitchers/
         leverage index is not implemented yet.
-        Instead of adjusting for league average we adjust for division averages
-
+        Instead of adjusting for league average, we adjust for division averages
         """
         player_data = self.mlbstats.get_player_stats(
             player_id,
@@ -103,56 +128,87 @@ class PitchingCalculator:
             season=year,
         )
         team_id = player_data["pitching"]["season"].splits[0].team.id
-        player_stats = statsapi.player_stat_data(
-            player_id, "pitching", "season", 1, year
-        )
         team = self.mlbstats.get_team(team_id)
         basic_stats = player_data["pitching"]["season"].splits[0].stat
+
         # league ra/9
-        lg_ra9 = (
-            self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]
-        ) * 9
+        lg_ra9 = (self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]) * 9
         # fip scaled to ra/9
         fip_adjust = lg_ra9 - self.pitching.loc[year].loc["ERA"]
         fipr9 = self.fip(player_id, year) + fip_adjust
         # park factor adjusted fipr9
-        pfipr9 = fipr9 / (self.park_factor.loc[team.team_name].loc["FIP"] / 100)
+        pfipr9 = fipr9 / (
+            self.park_factors.loc[2025]
+            .loc[self.park_factors["Team"] == team.team_name]["FIP"]
+            .item()
+            / 100
+        )
+
         # Runs Above Average Per 9 scaled to division
-        if year not in self.division_fipr9s:
-            self.division_fipr9s[year] = self.__calc_divisions_fipr9(year)
-        raap9 = self.division_fipr9s[year][team.division.id] - pfipr9
-        # Dynamic Runs Per Win
         ip = float(basic_stats.innings_pitched)
-        d_rpw = (
-            (
+
+        if year > 2022:
+            # for the 2023 when inter-division games were reduced from 76 to 13
+            # and interleague were increased from 20 to 46
+            raap9 = self.calc_fipr9_league(year) - pfipr9
+            # Dynamic Runs Per Win
+            d_rpw = (
                 (
-                    (18 - ip / basic_stats.games_pitched)
-                    * self.division_fipr9s[year][team.division.id]
+                    ((18 - ip / basic_stats.games_pitched) * self.calc_fipr9_league(year))
+                    + ((ip / basic_stats.games_pitched) * pfipr9)
                 )
-                + ((ip / basic_stats.games_pitched) * pfipr9)
-            )
-            / 18
-            + 2
-        ) * 1.5
+                / 18
+                + 2
+            ) * 1.5
+        else:
+            raap9 = self.__calc_fipr9_divisions(year)[team.division.id] - pfipr9
+            # Dynamic Runs Per Win
+            d_rpw = (
+                (
+                    (
+                        (18 - ip / basic_stats.games_pitched)
+                        * self.__calc_fipr9_divisions(year)[team.division.id]
+                    )
+                    + ((ip / basic_stats.games_pitched) * pfipr9)
+                )
+                / 18
+                + 2
+            ) * 1.5
         # wins per game above average
         wpgaa = raap9 / d_rpw
         # replacement level
-        rl = 0.03 * (
-            1 - basic_stats.games_started / basic_stats.games_played
-        ) + 0.12 * (basic_stats.games_started / basic_stats.games_played)
+        rl = 0.03 * (1 - basic_stats.games_started / basic_stats.games_played) + 0.12 * (
+            basic_stats.games_started / basic_stats.games_played
+        )
         # wins per game above replacement
         wpgar = wpgaa + rl
         war_p = wpgar * (ip / 9)
         # leverage index
-        # li = (1+gm_li)/2
+        # li_multiplier = (1+gm_li)/2
         return war_p
 
 
 if __name__ == "__main__":
-    pitcher_stats = PitchingCalculator("./league_avg_pitching.csv", "./pf_2025.csv")
-    # name = "Edwin Díaz"
-    name = "Shohei Ohtani"
+    import sqlalchemy as sa
+    import os
+    url = sa.URL.create(
+        drivername="postgresql",
+        username=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        database="awar",
+    )
+    engine = sa.create_engine(url)
+    league_avg_pitching = pd.read_sql(
+        'SELECT * FROM league_avg_pitching WHERE "Season" = 2025;', con=engine, index_col="Season"
+    )
+    park_factors = pd.read_sql(
+        'SELECT * FROM park_factors WHERE "Season" = 2025;', con=engine, index_col="Season"
+    )
     mlb = mlbstatsapi.Mlb()
+    pitcher_stats = PitchingCalculator(league_avg_pitching, park_factors, mlb)
+    name = "Shohei Ohtani"
     player_id = mlb.get_people_id(name)[0]
     fip = pitcher_stats.fip(player_id, 2025)
     print(f"{name} fip {fip}")
