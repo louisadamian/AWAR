@@ -42,6 +42,30 @@ class PitchingCalculator:
             / year_data.loc["IP"]
         )
 
+    def __reafip_consts(self, year)-> pd.DataFrame:
+        pass
+
+    def reafip(self, player_id: int, year: int) -> float:
+        """
+        Run Expectancy Adjusted FIP
+
+        this statistic makes an attempt to adjust fip so instead of using static constants FIP the value of home runs,
+        walks/hit by pitch, and strikeouts are computed using the per-season run expectancy data.
+        """
+        player_data = self.mlbstats.get_player_stats(
+            player_id,
+            stats=["season", "seasonAdvanced"],
+            groups=["pitching"],
+            season=year,
+        )
+        basic_stats = player_data["pitching"]["season"].splits[0].stat
+        consts = self.__reafip_consts(year)
+        return (
+            consts["hr"] * basic_stats.home_runs
+            + consts["walks"] * (basic_stats.base_on_balls + basic_stats.hit_by_pitch)
+            - consts["so"] * basic_stats.strikeouts
+        ) / float(basic_stats.innings_pitched)
+
     def fip(self, player_id: int, year: int):
         """
         Fielding Independent Pitching
@@ -132,7 +156,9 @@ class PitchingCalculator:
         basic_stats = player_data["pitching"]["season"].splits[0].stat
 
         # league ra/9
-        lg_ra9 = (self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]) * 9
+        lg_ra9 = (
+            self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]
+        ) * 9
         # fip scaled to ra/9
         fip_adjust = lg_ra9 - self.pitching.loc[year].loc["ERA"]
         fipr9 = self.fip(player_id, year) + fip_adjust
@@ -154,7 +180,10 @@ class PitchingCalculator:
             # Dynamic Runs Per Win
             d_rpw = (
                 (
-                    ((18 - ip / basic_stats.games_pitched) * self.calc_fipr9_league(year))
+                     (
+                        (18 - ip / basic_stats.games_pitched)
+                        * self.calc_fipr9_league(year)
+                    )
                     + ((ip / basic_stats.games_pitched) * pfipr9)
                 )
                 / 18
@@ -177,9 +206,9 @@ class PitchingCalculator:
         # wins per game above average
         wpgaa = raap9 / d_rpw
         # replacement level
-        rl = 0.03 * (1 - basic_stats.games_started / basic_stats.games_played) + 0.12 * (
-            basic_stats.games_started / basic_stats.games_played
-        )
+        rl = 0.03 * (
+            1 - basic_stats.games_started / basic_stats.games_played
+        ) + 0.12 * (basic_stats.games_started / basic_stats.games_played)
         # wins per game above replacement
         wpgar = wpgaa + rl
         war_p = wpgar * (ip / 9)
@@ -191,6 +220,7 @@ class PitchingCalculator:
 if __name__ == "__main__":
     import sqlalchemy as sa
     import os
+
     url = sa.URL.create(
         drivername="postgresql",
         username=os.getenv("DB_USER"),
@@ -201,10 +231,14 @@ if __name__ == "__main__":
     )
     engine = sa.create_engine(url)
     league_avg_pitching = pd.read_sql(
-        'SELECT * FROM league_avg_pitching WHERE "Season" = 2025;', con=engine, index_col="Season"
+        'SELECT * FROM league_avg_pitching WHERE "Season" = 2025;',
+        con=engine,
+        index_col="Season",
     )
     park_factors = pd.read_sql(
-        'SELECT * FROM park_factors WHERE "Season" = 2025;', con=engine, index_col="Season"
+        'SELECT * FROM park_factors WHERE "Season" = 2025;',
+        con=engine,
+        index_col="Season",
     )
     mlb = mlbstatsapi.Mlb()
     pitcher_stats = PitchingCalculator(league_avg_pitching, park_factors, mlb)
