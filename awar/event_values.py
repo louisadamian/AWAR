@@ -1,6 +1,6 @@
 import numpy as np
 import os
-import Utils
+import utils
 import statistics
 
 # Column indices of data in int data matrix
@@ -28,7 +28,7 @@ def stitch_data(str_data: np.ndarray, int_data: np.ndarray):
     and base occupancy binary."""
     runners_on = str_data[:, [ON_FIRST, ON_SECOND, ON_THIRD, GAME_END]]
     runners_on_copy = runners_on
-    runners_on_int = Utils.runners_on_binary(runners_on_copy)
+    runners_on_int = utils.runners_on_binary(runners_on_copy)
     sitch_events = int_data[:, [INNING_NUM_INDEX, BTEAM_INDEX, OUTS_INDEX, EVENT_TYPE, BAT_DEST, FIRST_DEST, SECOND_DEST, THIRD_DEST]]
     return np.concatenate((sitch_events, runners_on_int), axis=1, dtype=int)
 
@@ -37,7 +37,7 @@ def get_event_values(sitch_events: np.ndarray, matrix: np.ndarray):
     """Gets value weights for each batting event."""
     event_run_expectancies = [[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[],[]]
     # Gets runner state before and after the play
-    runners_before = Utils.S_3_list(sitch_events[:, [8, 9, 10]])
+    runners_before = utils.S_3_list(sitch_events[:, [8, 9, 10]])
     runners_after = runners_before
     runners_after = np.roll(runners_after, -1)
 
@@ -47,7 +47,7 @@ def get_event_values(sitch_events: np.ndarray, matrix: np.ndarray):
     # Sets up events for before and after comparison
     after = sitch_events
     after = np.roll(after, -1, axis=0)
-    before = Utils.play_score(sitch_events)
+    before = utils.play_score(sitch_events)
 
     # Gets the run expectancy values from the matrix based on before and after state for each play
     matrix_vals_before = matrix[before[:, 2], runners_before]

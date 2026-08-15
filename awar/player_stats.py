@@ -1,6 +1,5 @@
 import numpy as np
 import os
-import Utils
 
 BASE_DATA_PATH = os.path.join(os.getcwd(), 'Data', 'Output')
 # Int data indices
