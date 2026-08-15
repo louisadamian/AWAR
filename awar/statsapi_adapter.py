@@ -1,6 +1,6 @@
 import pandas as pd
 import mlbstatsapi
-
+import numpy as np
 
 
 def fill_play_by_game(mlb:mlbstatsapi.Mlb, game_id: int, df: pd.DataFrame) -> pd.DataFrame:
@@ -52,3 +52,7 @@ def get_play_by_play_games(mlb:mlbstatsapi.Mlb, year: int=None, date=None) -> pd
         for game in date.games:
             df = fill_play_by_game(mlb, game.game_pk, df)
     return df
+
+def runners_on_base(pbp:pd.DataFrame):
+    runners_on = np.where(pbp[['runner_on_1b','runner_on_2b','runner_on_3b']].isna(), 0, 1).astype(np.bool_)
+    return np.mean(runners_on, axis=0)
