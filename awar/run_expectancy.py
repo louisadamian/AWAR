@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import os
 import utils
 
@@ -19,6 +20,67 @@ ON_THIRD = 5
 GAME_END = 33
 
 BASE_DATA_PATH = os.path.join(os.getcwd(), 'Data', 'Output')
+
+
+def run_ex(pbp: pd.DataFrame, year:int):
+    """
+    compute the run expectancy matrix from a play by play DataFrame
+    """
+    #drop any half innings that are not completed
+    last_play_outs = pbp.groupby("half")["outs"].transform("max")
+    complete_half = last_play_outs.eq(3)
+    # Drop any half inning where a walk-off could occur (bottom half of the last scheduled inning or bottom extra innings)
+    walk_off_innings = (pbp["side"].eq("bottom") & (pbp["inning"] >= 9))
+    if year==2020 or year==2021:
+        # walk off innings for 7 inning games in 2020 and 2021
+        walk_off_7_innings = (pbp["side"].eq("bottom") & (pbp["inning"] >= 7) & pbp["7_innings"] == True)
+        keep = ~(walk_off_innings & walk_off_7_innings & pbp["inning"] >9) & complete_half
+    elif year>=2020:
+        #drop innings with ghost runner https://www.mlb.com/glossary/rules/designated-runner
+        keep = ~(walk_off_innings & pbp["inning"] >9) & complete_half
+    else:
+        keep = ~walk_off_innings & complete_half
+    pbp = pbp[keep].copy()
+    # calculate runs for each PA
+    pbp["bat_score"] = np.where(
+        pbp["side"].eq("top"), pbp["away_score"], pbp["home_score"]
+    )
+    prev = pbp.groupby(["game_id", "side"])["bat_score"].shift(1).fillna(0)
+    pbp["runs"] = (pbp["bat_score"] - prev).astype(int)
+    pbp["half"] = pbp.groupby(["game_id", "inning", "side"], sort=False).ngroup()
+    # get on base as a bool
+    bases = ["runner_on_1b", "runner_on_2b", "runner_on_3b"]
+    on_base_bool = pbp[bases].notna()
+    # group the data by half innings
+    halves_groups = pbp.groupby("half", sort=False)
+    # get the base states before each play
+    pre_bases = on_base_bool.groupby(pbp["half"], sort=False).shift(1).fillna(False)
+    pre_bases.columns = ["pre_1b", "pre_2b", "pre_3b"]
+    pbp["pre_outs"] = halves_groups["outs"].shift(1).fillna(0).astype(int)
+    pbp = pd.concat([pbp, pre_bases], axis=1)
+    # calculate RE24 for each play
+    pbp["re24"] = (
+        halves_groups["runs"].transform("sum")
+        - halves_groups["runs"].cumsum()
+        + pbp["runs"]
+    )
+    # get the array index for the base state
+    pbp["base_idx"] = (
+        pbp["pre_1b"].astype(int)
+        + 2 * pbp["pre_2b"].astype(int)
+        + 4 * pbp["pre_3b"].astype(int)
+    )
+    # calculate the number of runs for each RE24 cell
+    runs = np.zeros((3, 8), dtype=int)
+    np.add.at(
+        runs,
+        (pbp["pre_outs"].to_numpy(), pbp["base_idx"].to_numpy()),
+        pbp["re24"].to_numpy(),
+    )
+    # calculate the number of occurrences of each RE24 cell
+    counts = np.zeros((3, 8), dtype=int)
+    np.add.at(counts, (pbp["pre_outs"].to_numpy(), pbp["base_idx"].to_numpy()), 1)
+    return np.divide(runs, counts)
 
 
 # TODO these methods should be friendly to splitting leagues by home park. Also intend to remove all non-Ohtani pitcher
