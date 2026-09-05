@@ -19,32 +19,36 @@ ON_SECOND = 4
 ON_THIRD = 5
 GAME_END = 33
 
-BASE_DATA_PATH = os.path.join(os.getcwd(), 'Data', 'Output')
+BASE_DATA_PATH = os.path.join(os.getcwd(), "Data", "Output")
 
 
-def run_ex(pbp: pd.DataFrame, year:int):
+def run_ex(pbp: pd.DataFrame, year: int)-> np.ndarray:
+    """Compute the run expectancy matrix from a play by play DataFrame
+
+    RE24 is computed with any half innings where a walkoff could occur, bottom of 9th or later
+    innings and bottom of 7th or later innings for double headers in 2020-2021 Dropped. All extra innings with a ghost
+    runner (2020 and later) are dropped. Any incomplete innings (rain out, etc.)
+    pbp (pd.DataFrame): play by play data imported from play_by_play
     """
-    compute the run expectancy matrix from a play by play DataFrame
-    """
-    #drop any half innings that are not completed
+    # drop any half innings that are not completed
     last_play_outs = pbp.groupby("half")["outs"].transform("max")
     complete_half = last_play_outs.eq(3)
     # Drop any half inning where a walk-off could occur (bottom half of the last scheduled inning or bottom extra innings)
-    walk_off_innings = (pbp["side"].eq("bottom") & (pbp["inning"] >= 9))
-    if year==2020 or year==2021:
+    walk_off_innings = pbp["side"].eq("bottom") & (pbp["inning"] >= 9)
+    if year == 2020 or year == 2021:
         # walk off innings for 7 inning games in 2020 and 2021
-        walk_off_7_innings = (pbp["side"].eq("bottom") & (pbp["inning"] >= 7) & pbp["7_innings"] == True)
-        keep = ~(walk_off_innings & walk_off_7_innings & pbp["inning"] >9) & complete_half
-    elif year>=2020:
-        #drop innings with ghost runner https://www.mlb.com/glossary/rules/designated-runner
-        keep = ~(walk_off_innings & pbp["inning"] >9) & complete_half
+        walk_off_7_innings = (
+            pbp["side"].eq("bottom") & (pbp["inning"] >= 7) & pbp["7_innings"] == True
+        )
+        keep = ~(walk_off_innings & walk_off_7_innings & pbp["inning"] > 9) & complete_half
+    elif year >= 2020:
+        # drop innings with ghost runner https://www.mlb.com/glossary/rules/designated-runner
+        keep = ~(walk_off_innings & pbp["inning"] > 9) & complete_half
     else:
         keep = ~walk_off_innings & complete_half
     pbp = pbp[keep].copy()
     # calculate runs for each PA
-    pbp["bat_score"] = np.where(
-        pbp["side"].eq("top"), pbp["away_score"], pbp["home_score"]
-    )
+    pbp["bat_score"] = np.where(pbp["side"].eq("top"), pbp["away_score"], pbp["home_score"])
     prev = pbp.groupby(["game_id", "side"])["bat_score"].shift(1).fillna(0)
     pbp["runs"] = (pbp["bat_score"] - prev).astype(int)
     pbp["half"] = pbp.groupby(["game_id", "inning", "side"], sort=False).ngroup()
@@ -60,15 +64,11 @@ def run_ex(pbp: pd.DataFrame, year:int):
     pbp = pd.concat([pbp, pre_bases], axis=1)
     # calculate RE24 for each play
     pbp["re24"] = (
-        halves_groups["runs"].transform("sum")
-        - halves_groups["runs"].cumsum()
-        + pbp["runs"]
+        halves_groups["runs"].transform("sum") - halves_groups["runs"].cumsum() + pbp["runs"]
     )
     # get the array index for the base state
     pbp["base_idx"] = (
-        pbp["pre_1b"].astype(int)
-        + 2 * pbp["pre_2b"].astype(int)
-        + 4 * pbp["pre_3b"].astype(int)
+        pbp["pre_1b"].astype(int) + 2 * pbp["pre_2b"].astype(int) + 4 * pbp["pre_3b"].astype(int)
     )
     # calculate the number of runs for each RE24 cell
     runs = np.zeros((3, 8), dtype=int)
