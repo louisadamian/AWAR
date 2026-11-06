@@ -95,8 +95,8 @@ def get_play_by_play_games(mlb:mlbstatsapi.Mlb, year: int=None, date: datetime.d
     schedule_meta = __get_schedule_meta(schedule)
     for date in schedule.dates:
         for game in date.games:
-            df = __get_pbp_data(mlb, schedule_meta, game)
-    return df
+            plays+=__get_pbp_data(mlb, schedule_meta, game.game_pk)
+    return pd.DataFrame(plays)
 
 def runners_on_base(pbp:pd.DataFrame):
     runners_on = np.where(pbp[['runner_on_1b','runner_on_2b','runner_on_3b']].isna(), 0, 1).astype(np.bool_)
