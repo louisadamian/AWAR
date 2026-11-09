@@ -9,43 +9,50 @@ from utils import Guts
 
 
 class PitchingCalculator:
-    """
-    Pitcher stats calculator
-    equations credit to Piper Slowinski at Fangraphs
-    """
 
     def __init__(
         self,
         guts: Guts,
         mlb_stats: mlbstatsapi.Mlb,
     ):
+        """
+        Manages calculating pitcher statistics
+
+        Args:
+            guts (Guts): guts statisics
+            mlb_stats: (mlbstatsapi.Mlb) mlbstatsapi retriever
+        """
         self.guts = guts
-        self.park_factors = park_factors
         self.division_fipr9s = {}
         self.mlbstats = mlb_stats
         self.fipr9_devisions = dict()
         self.fipr9_league = dict()
 
-    def fipc(self, year: int):
+    def fipc(self, season: int) -> float:
         """
-        FIP constant
+        FIP constant for a given season
         Defined from https://library.fangraphs.com/pitching/fip/
+
+        args:
+            season (int): the MLB season to get fip the constant for
+        Returns
+            float: The fip constant for the requested season.
         """
-        year_data = self.pitching.loc[year]
+        season_data = self.guts.league_avg_pitching(season)
         return (
-            year_data.loc["ERA"]
+            season_data["ERA"]
             - (
-                13 * year_data.loc["HR"]
-                + 3 * (year_data.loc["BB"] + year_data.loc["HBP"])
-                - 2 * year_data.loc["SO"]
+                13 * season_data["HR"]
+                + 3 * (season_data["BB"] + season_data["HBP"])
+                - 2 * season_data["SO"]
             )
-            / year_data.loc["IP"]
+            / season_data["IP"]
         )
 
-    def __reafip_consts(self, year)-> pd.DataFrame:
+    def __reafip_consts(self, season) -> pd.DataFrame:
         pass
 
-    def reafip(self, player_id: int, year: int) -> float:
+    def __reafip(self, player_id: int, season: int) -> float:
         """
         Run Expectancy Adjusted FIP
 
@@ -56,40 +63,46 @@ class PitchingCalculator:
             player_id,
             stats=["season", "seasonAdvanced"],
             groups=["pitching"],
-            season=year,
+            season=season,
         )
         basic_stats = player_data["pitching"]["season"].splits[0].stat
-        consts = self.__reafip_consts(year)
+        consts = self.__reafip_consts(season)
         return (
             consts["hr"] * basic_stats.home_runs
             + consts["walks"] * (basic_stats.base_on_balls + basic_stats.hit_by_pitch)
             - consts["so"] * basic_stats.strikeouts
         ) / float(basic_stats.innings_pitched)
 
-    def fip(self, player_id: int, year: int):
+    def fip(self, player_id: int, season: int) -> float:
         """
         Fielding Independent Pitching
         Defined from https://library.fangraphs.com/pitching/fip/
+
+        Args:
+            player_id (int): MLB stats api player id for desired player
+            season: MLB season yaar to calculate FIP for
+        Returns:
+            float: fip
         """
         player_data = self.mlbstats.get_player_stats(
             player_id,
             stats=["season", "seasonAdvanced"],
             groups=["pitching"],
-            season=year,
+            season=season,
         )
         basic_stats = player_data["pitching"]["season"].splits[0].stat
         return (
             13 * basic_stats.home_runs
             + 3 * (basic_stats.base_on_balls + basic_stats.hit_by_pitch)
             - 2 * basic_stats.strikeouts
-        ) / float(basic_stats.innings_pitched) + self.fipc(year)
+        ) / float(basic_stats.innings_pitched) + self.fipc(season)
 
-    def fip_team(self, team_id: int, year: int):
+    def fip_team(self, team_id: int, season: int):
         team_stats = self.mlbstats.get_team_stats(
             team_id,
             stats=["season", "seasonAdvanced"],
             groups=["pitching"],
-            **{"season": year},
+            **{"season": season},
         )
         pitching_stats = team_stats["pitching"]["season"].splits[0].stat
         return (
@@ -99,22 +112,22 @@ class PitchingCalculator:
                 - 2 * pitching_stats.strikeouts
             )
             / float(pitching_stats.innings_pitched)
-        ) + self.fipc(year)
+        ) + self.fipc(season)
 
-    def __calc_fipr9_divisions(self, year):
+    def __calc_fipr9_divisions(self, season: int) -> dict:
         """
-        fipr9 for all divisions for a given year
+        fipr9 for all divisions for a given season
         """
-        if year in self.fipr9_devisions.keys():
-            return self.fipr9_devisions[year]
+        if season in self.fipr9_devisions.keys():
+            return self.fipr9_devisions[season]
         teams = self.mlbstats.get_teams(sport_id=1)
         divisions_fipr9s = {}
-        league_avg_pitching = self.guts.league_avg_pitching(year)
+        league_avg_pitching = self.guts.league_avg_pitching(season)
         fip_adj = (
             league_avg_pitching.loc["R"] / league_avg_pitching.loc["IP"]
         ) * 9 - league_avg_pitching.loc["ERA"]
         for team in teams:
-            fipr9 = self.fip_team(team.id, year) + fip_adj
+            fipr9 = self.fip_team(team.id, season) + fip_adj
             if team.division.id not in divisions_fipr9s:
                 divisions_fipr9s[team.division.id] = [fipr9]
             else:
@@ -122,78 +135,85 @@ class PitchingCalculator:
         fipr9s = {}
         for key in divisions_fipr9s.keys():
             fipr9s[key] = np.array(divisions_fipr9s[key]).mean()
-        self.fipr9_devisions[year] = fipr9s
+        self.fipr9_devisions[season] = fipr9s
         return fipr9s
 
-    def calc_fipr9_league(self, year):
-        if year in self.fipr9_league.keys():
-            return self.fipr9_league[year]
+    def calc_fipr9_league(self, season: int):
+        """
+        calculate the league average fipr9 for a given season
+        """
+        if season in self.fipr9_league.keys():
+            return self.fipr9_league[season]
         teams = self.mlbstats.get_teams(sport_id=1)
         team_fipr9s = np.empty(30)
-        league_avg_pitching = self.guts.league_avg_pitching(year)
-        fip_adj = (
-            league_avg_pitching.loc["R"] / league_avg_pitching.loc["IP"]
-        ) * 9 - league_avg_pitching.loc["ERA"]
+        league_avg_pitching = self.guts.league_avg_pitching(season)
+        fip_adj = (league_avg_pitching["R"] / league_avg_pitching["IP"]) * 9 - league_avg_pitching[
+            "ERA"
+        ]
         for i, team in enumerate(teams):
-            fipr9 = self.fip_team(team.id, year) + fip_adj
+            fipr9 = self.fip_team(team.id, season) + fip_adj
             team_fipr9s[i] = fipr9
-        fipr9_year = np.mean(team_fipr9s)
-        self.fipr9_league[year] = fipr9_year
-        return fipr9_year
+        fipr9_season = np.mean(team_fipr9s)
+        self.fipr9_league[season] = fipr9_season
+        return fipr9_season
 
-    def pitching_war(self, player_id, year: int = datetime.now().year):
+    def pitching_war(self, player_id: int, season: int) -> float:
         """
+        Calculate WAR for pitchers
         https://library.fangraphs.com/war/calculating-war-pitchers/
         leverage index is not implemented yet.
         Instead of adjusting for league average, we adjust for division averages
+
+        Args:
+            player_id (int): MLB stats api id for desired player
+            season: season to calculate war for
         """
+
         player_data = self.mlbstats.get_player_stats(
             player_id,
             stats=["season", "seasonAdvanced"],
             groups=["pitching"],
-            season=year,
+            season=season,
         )
         if player_data == {}:
             return 0.0
-        park_factors = self.guts.park_factors(year)
+        park_factors = self.guts.park_factors(season)
         team_id = player_data["pitching"]["season"].splits[0].team.id
         team = self.mlbstats.get_team(team_id)
         basic_stats = player_data["pitching"]["season"].splits[0].stat
-        league_avg_pitching = self.guts.league_avg_pitching(year)
+        league_avg_pitching = self.guts.league_avg_pitching(season)
         # league ra/9
-        lg_ra9 = (league_avg_pitching.loc["R"] / league_avg_pitching.loc["IP"]) * 9
+        lg_ra9 = (league_avg_pitching["R"] / league_avg_pitching["IP"]) * 9
         # fip scaled to ra/9
-        fip_adjust = lg_ra9 - league_avg_pitching.loc["ERA"]
-        fipr9 = self.fip(player_id, year) + fip_adjust
+        fip_adjust = lg_ra9 - league_avg_pitching["ERA"]
+        fipr9 = self.fip(player_id, season) + fip_adjust
         # park factor adjusted fipr9
-        pfipr9 = fipr9 / (
-            park_factors.loc[park_factors["Team"] == team.team_name]["FIP"].item() / 100
-        )
+        pfipr9 = fipr9 / (park_factors[park_factors["Team"] == team.team_name]["FIP"].item() / 100)
 
         # Runs Above Average Per 9 scaled to division
         ip = float(basic_stats.innings_pitched)
 
-        if year > 2022:
+        if season > 2022:
             # for the 2023 when inter-division games were reduced from 76 to 13
             # and interleague were increased from 20 to 46
-            raap9 = self.calc_fipr9_league(year) - pfipr9
+            raap9 = self.calc_fipr9_league(season) - pfipr9
             # Dynamic Runs Per Win
             d_rpw = (
                 (
-                    ((18 - ip / basic_stats.games_pitched) * self.calc_fipr9_league(year))
+                    ((18 - ip / basic_stats.games_pitched) * self.calc_fipr9_league(season))
                     + ((ip / basic_stats.games_pitched) * pfipr9)
                 )
                 / 18
                 + 2
             ) * 1.5
         else:
-            raap9 = self.__calc_fipr9_divisions(year)[team.division.id] - pfipr9
+            raap9 = self.__calc_fipr9_divisions(season)[team.division.id] - pfipr9
             # Dynamic Runs Per Win
             d_rpw = (
                 (
                     (
                         (18 - ip / basic_stats.games_pitched)
-                        * self.__calc_fipr9_divisions(year)[team.division.id]
+                        * self.__calc_fipr9_divisions(season)[team.division.id]
                     )
                     + ((ip / basic_stats.games_pitched) * pfipr9)
                 )
@@ -203,9 +223,9 @@ class PitchingCalculator:
         # wins per game above average
         wpgaa = raap9 / d_rpw
         # replacement level
-        rl = 0.03 * (
-            1 - basic_stats.games_started / basic_stats.games_played
-        ) + 0.12 * (basic_stats.games_started / basic_stats.games_played)
+        rl = 0.03 * (1 - basic_stats.games_started / basic_stats.games_played) + 0.12 * (
+            basic_stats.games_started / basic_stats.games_played
+        )
         # wins per game above replacement
         wpgar = wpgaa + rl
         war_p = wpgar * (ip / 9)
@@ -227,21 +247,12 @@ if __name__ == "__main__":
         database="awar",
     )
     engine = sa.create_engine(url)
-    league_avg_pitching = pd.read_sql(
-        'SELECT * FROM league_avg_pitching WHERE "Season" = 2025;',
-        con=engine,
-        index_col="Season",
-    )
-    park_factors = pd.read_sql(
-        'SELECT * FROM park_factors WHERE "Season" = 2025;',
-        con=engine,
-        index_col="Season",
-    )
     mlb = mlbstatsapi.Mlb()
-    pitcher_stats = PitchingCalculator(league_avg_pitching, park_factors, mlb)
+    guts = Guts(engine)
+    pitcher_stats = PitchingCalculator(guts, mlb)
     name = "Shohei Ohtani"
     player_id = mlb.get_people_id(name)[0]
     fip = pitcher_stats.fip(player_id, 2025)
     print(f"{name} fip {fip}")
-    war = pitcher_stats.pitching_war(player_id, year=2025)
+    war = pitcher_stats.pitching_war(player_id, season=2025)
     print(f"{name} pitching war {war}")
