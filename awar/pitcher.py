@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime
 import numpy as np
 import os
+from utils import Guts
 
 
 class PitchingCalculator:
@@ -15,11 +16,10 @@ class PitchingCalculator:
 
     def __init__(
         self,
-        league_avg_pitching: pandas.DataFrame,
-        park_factors: pandas.DataFrame,
+        guts: Guts,
         mlb_stats: mlbstatsapi.Mlb,
     ):
-        self.pitching = league_avg_pitching
+        self.guts = guts
         self.park_factors = park_factors
         self.division_fipr9s = {}
         self.mlbstats = mlb_stats
@@ -109,9 +109,10 @@ class PitchingCalculator:
             return self.fipr9_devisions[year]
         teams = self.mlbstats.get_teams(sport_id=1)
         divisions_fipr9s = {}
+        league_avg_pitching = self.guts.league_avg_pitching(year)
         fip_adj = (
-            self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]
-        ) * 9 - self.pitching.loc[year].loc["ERA"]
+            league_avg_pitching.loc["R"] / league_avg_pitching.loc["IP"]
+        ) * 9 - league_avg_pitching.loc["ERA"]
         for team in teams:
             fipr9 = self.fip_team(team.id, year) + fip_adj
             if team.division.id not in divisions_fipr9s:
@@ -129,9 +130,10 @@ class PitchingCalculator:
             return self.fipr9_league[year]
         teams = self.mlbstats.get_teams(sport_id=1)
         team_fipr9s = np.empty(30)
+        league_avg_pitching = self.guts.league_avg_pitching(year)
         fip_adj = (
-            self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]
-        ) * 9 - self.pitching.loc[year].loc["ERA"]
+            league_avg_pitching.loc["R"] / league_avg_pitching.loc["IP"]
+        ) * 9 - league_avg_pitching.loc["ERA"]
         for i, team in enumerate(teams):
             fipr9 = self.fip_team(team.id, year) + fip_adj
             team_fipr9s[i] = fipr9
@@ -151,23 +153,21 @@ class PitchingCalculator:
             groups=["pitching"],
             season=year,
         )
+        if player_data == {}:
+            return 0.0
+        park_factors = self.guts.park_factors(year)
         team_id = player_data["pitching"]["season"].splits[0].team.id
         team = self.mlbstats.get_team(team_id)
         basic_stats = player_data["pitching"]["season"].splits[0].stat
-
+        league_avg_pitching = self.guts.league_avg_pitching(year)
         # league ra/9
-        lg_ra9 = (
-            self.pitching.loc[year].loc["R"] / self.pitching.loc[year].loc["IP"]
-        ) * 9
+        lg_ra9 = (league_avg_pitching.loc["R"] / league_avg_pitching.loc["IP"]) * 9
         # fip scaled to ra/9
-        fip_adjust = lg_ra9 - self.pitching.loc[year].loc["ERA"]
+        fip_adjust = lg_ra9 - league_avg_pitching.loc["ERA"]
         fipr9 = self.fip(player_id, year) + fip_adjust
         # park factor adjusted fipr9
         pfipr9 = fipr9 / (
-            self.park_factors.loc[2025]
-            .loc[self.park_factors["Team"] == team.team_name]["FIP"]
-            .item()
-            / 100
+            park_factors.loc[park_factors["Team"] == team.team_name]["FIP"].item() / 100
         )
 
         # Runs Above Average Per 9 scaled to division
@@ -180,10 +180,7 @@ class PitchingCalculator:
             # Dynamic Runs Per Win
             d_rpw = (
                 (
-                     (
-                        (18 - ip / basic_stats.games_pitched)
-                        * self.calc_fipr9_league(year)
-                    )
+                    ((18 - ip / basic_stats.games_pitched) * self.calc_fipr9_league(year))
                     + ((ip / basic_stats.games_pitched) * pfipr9)
                 )
                 / 18

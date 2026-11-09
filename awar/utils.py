@@ -1,4 +1,7 @@
 import numpy as np
+from functools import lru_cache
+import pandas as pd
+import sqlalchemy as sa
 
 
 def runners_on_binary(runners_on: np.ndarray):
@@ -31,3 +34,33 @@ def play_score(outs_scores: np.ndarray):
     outs_scores[:, 4] = np.sum(runner_dests, axis=1)  # Sum of scores on each play
     return outs_scores
 
+
+class Guts:
+    def __init__(self, engine: sa._engine.URL):
+        self.engine = engine
+
+    @lru_cache(maxsize=10)
+    def league_avg_pitching(self, season: int):
+        query = sa.text('SELECT * FROM league_avg_pitching WHERE "Season" = :year;')
+        df = pd.read_sql(
+            query,
+            params={"year": season},
+            con=self.engine,
+            index_col="Season",
+        )
+        if df.empty:
+            raise ValueError(f"No league average pitching data for the {season} season")
+        return df.iloc[0]
+
+    @lru_cache(maxsize=10)
+    def park_factors(self, season):
+        query = sa.text('SELECT * FROM park_factors WHERE "Season" = :year;')
+        df = pd.read_sql(
+            query,
+            params={"year": season},
+            con=self.engine,
+            index_col="Season",
+        )
+        if df.empty:
+            raise ValueError(f"No league park factors for the {season} season")
+        return df
