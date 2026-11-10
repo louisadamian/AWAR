@@ -22,27 +22,33 @@ GAME_END = 33
 BASE_DATA_PATH = os.path.join(os.getcwd(), "Data", "Output")
 
 
-def run_ex(pbp: pd.DataFrame, year: int)-> np.ndarray:
+def run_ex(pbp: pd.DataFrame, season: int) -> np.ndarray:
     """Compute the run expectancy matrix from a play by play DataFrame
 
     RE24 is computed with any half innings where a walkoff could occur, bottom of 9th or later
     innings and bottom of 7th or later innings for double headers in 2020-2021 Dropped. All extra innings with a ghost
     runner (2020 and later) are dropped. Any incomplete innings (rain out, etc.)
     pbp (pd.DataFrame): play by play data imported from play_by_play
+
+    Args:
+        pbp (pd.DataFrame): play-by-play data from sql_write_play_by_play()
+        season (int): the year of the mlb season that the pbp data is from
+    Returns:
+        np.ndarray: a 3x8 re24 matrix with outs on the 0th axis and base states on the 1st axis.
     """
     # drop any half innings that are not completed
     last_play_outs = pbp.groupby("half")["outs"].transform("max")
     complete_half = last_play_outs.eq(3)
     # Drop any half inning where a walk-off could occur (bottom half of the last scheduled inning or bottom extra innings)
     walk_off_innings = pbp["side"].eq("bottom") & (pbp["inning"] >= 9)
-    if year == 2020 or year == 2021:
+    if season == 2020 or season == 2021:
         # walk off innings for 7 inning games in 2020 and 2021
         walk_off_7_innings = (
             pbp["side"].eq("bottom") & (pbp["inning"] >= 7) & pbp["7_innings"] == True
         )
         keep = ~(walk_off_innings & walk_off_7_innings & pbp["inning"] > 9) & complete_half
-    elif year >= 2020:
-        # drop innings with ghost runner https://www.mlb.com/glossary/rules/designated-runner
+    elif season >= 2020:
+        # drop innings with zombie(ghost) runner https://www.mlb.com/glossary/rules/designated-runner
         keep = ~(walk_off_innings & pbp["inning"] > 9) & complete_half
     else:
         keep = ~walk_off_innings & complete_half

@@ -1,9 +1,10 @@
 import pandas as pd
 import sqlalchemy as sa
 from sqlalchemy import Column, Integer, Float
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, declarative_base
+
+
 import os
-from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
